@@ -1,16 +1,10 @@
 name: Sync Downloads to KV
  
 on:
-  on:
-  repository_dispatch:
+  repository_dispatch:   
     types: [sync_files]
-  workflow_dispatch:
+  workflow_dispatch:         
   
-  workflow_run:
-    workflows: ["Remote Download and Notify"] # نام دقیق فایل download.yml
-    types:
-      - completed
-
 jobs:
   sync:
     permissions:
@@ -59,8 +53,8 @@ jobs:
               if [ -d "$ITEM" ]; then
                 # پوشه
                 CHILDREN=$(build_tree "$ITEM")
-                DIR_SIZE=$(du -sb "$ITEM" 2>/dev/null | cut -f1 || echo 0)
-                DIR_SIZE_HR=$(numfmt --to=iec-i --suffix=B "$DIR_SIZE" 2>/dev/null || echo "${DIR_SIZE}B")
+                DIR_SIZE=$(du -sb "$ITEM" 2>/dev/null | cut -f1 || echo 0)               
+                DIR_SIZE_HR=$(numfmt --to=si --suffix=B "$DIR_SIZE" 2>/dev/null | tr -d ' ' || echo "${DIR_SIZE}B")
                 FOLDER_URL="https://github.com/${REPO}/tree/${BRANCH}/${ITEM}"
 
                 JSON+=$(jq -n \
@@ -75,7 +69,7 @@ jobs:
               elif [ -f "$ITEM" ]; then
                 # فایل
                 FILE_SIZE=$(stat -c%s "$ITEM")
-                FILE_SIZE_HR=$(numfmt --to=iec-i --suffix=B "$FILE_SIZE" 2>/dev/null || echo "${FILE_SIZE}B")
+                FILE_SIZE_HR=$(numfmt --to=si --suffix=B "$FILE_SIZE" 2>/dev/null | tr -d ' ' || echo "${FILE_SIZE}B")
 
                 ENCODED=$(python3 -c "import urllib.parse, sys; print(urllib.parse.quote(sys.argv[1]))" "$ITEM")
                 FILE_URL="https://github.com/${REPO}/raw/${BRANCH}/${ENCODED}"
