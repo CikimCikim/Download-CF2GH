@@ -432,20 +432,18 @@ class KVManager {
 // ──────────────────────────────────────────────────────────────
 class UIBuilder {
     // Progress bar for downloading only (not uploading — no real data)
-    generateProgressBar(percent, speed = null, step = null, totalSteps = null) {
-      const pct = Math.min(100, Math.max(0, Number(percent) || 0));
-      const barWidth = 12;
-      const filled = Math.round((pct / 100) * barWidth);
-      const empty = barWidth - filled;
-      let bar;
-      if (filled === 0) bar = "•" + "━".repeat(barWidth - 1);
-      else if (filled >= barWidth) bar = "━".repeat(barWidth);
-      else bar = "━".repeat(filled - 1) + "•" + "━".repeat(empty);
+    generateProgressBar(percent, step = null, totalSteps = null) {
+        const pct = Math.min(100, Math.max(0, Number(percent) || 0));
+        const barWidth = 12;
+        const filled = Math.round((pct / 100) * barWidth);
+        const empty = barWidth - filled;
+        let bar;
+        if (filled === 0) bar = "•" + "━".repeat(barWidth - 1);
+        else if (filled >= barWidth) bar = "━".repeat(barWidth);
+        else bar = "━".repeat(filled - 1) + "•" + "━".repeat(empty);
     
-      const stepStr = (step !== null && totalSteps !== null) ? ` ${step}/${totalSteps}` : "";
-      // سرعت قبل از بار، مونو
-      const speedStr = speed ? `${formatMono(speed)}  ` : "";
-      return `${speedStr}▶ ${formatMono(`${bar} ${pct}%${stepStr}`)}`;
+        const stepStr = (step !== null && totalSteps !== null) ? ` ${step}/${totalSteps}` : "";
+        return `▶ ${formatMono(`${bar} ${pct}%${stepStr}`)}`;
     }
     // Tree display (for /folder detail view)
     buildTreeText(node, indent = "", isLast = true) {
@@ -487,29 +485,31 @@ class UIBuilder {
     }
         // Status message
     formatStatusMessage({ status, fileName, progress, size, step, totalSteps, speed, isUploading, isLargeFile }) {
-  // ایموجی استاتوس
-      let statusEmoji = "⏳";
-      if (status && status.includes("Setting up")) statusEmoji = "⚙️";
-      else if (status && status.includes("Download")) statusEmoji = "📥";
-      else if (status && status.includes("Upload")) statusEmoji = "📤";
-      else if (status && status.includes("Split")) statusEmoji = "✂️";
+        let statusEmoji = "⏳";
+        if (status && status.includes("Setting up")) statusEmoji = "⚙️";
+        else if (status && status.includes("Download")) statusEmoji = "📥";
+        else if (status && status.includes("Upload")) statusEmoji = "📤";
+        else if (status && status.includes("Split")) statusEmoji = "✂️";
     
-      // ایموجی فایل
-      const fileEmoji = fileName ? getFileEmoji(fileName) : "🎬";
-      const fileStr = fileName
-        ? `${fileEmoji} <b>File:</b> ${formatMono(truncateFileName(fileName))}\n`
-        : "";
-      const sizeStr = size ? `💾 <b>Size:</b> ${formatMono(size)}\n` : "";
+        const fileEmoji = fileName ? getFileEmoji(fileName) : "🎬";
+        const fileStr = fileName
+            ? `${fileEmoji} <b>File:</b> ${formatMono(truncateFileName(fileName))}\n`
+            : "";
+        const sizeStr = size ? `💾 <b>Size:</b> ${formatMono(size)}\n` : "";
     
-      // پاک کردن ایموجی تکراری از status
-      const cleanStatus = String(status || "Processing").replace(/^[⚙️📥📤✂️⏳]\s*/, "");
-      const statusStr = `${statusEmoji} <b>Status:</b> ${formatMono(cleanStatus)}\n`;
+        const cleanStatus = String(status || "Processing")
+            .replace(/^[⚙️📥📤✂️⏳\uFE0F]+\s*/, "")
+            .trim();
+        const statusStr = `${statusEmoji} <b>Status:</b> ${formatMono(cleanStatus)}\n`;
     
-      let barStr = "";
-      if (!isUploading && isLargeFile && progress !== null && progress !== undefined) {
-        barStr = `\n${this.generateProgressBar(progress, speed, step, totalSteps)}`;
-      }
-      return `${fileStr}${sizeStr}${statusStr}${barStr}`;
+        // progress bar + speed فقط برای فایل بزرگ و فقط موقع دانلود (نه آپلود)
+        let barStr = "";
+        if (!isUploading && isLargeFile && progress !== null && progress !== undefined) {
+            barStr = `\n${this.generateProgressBar(progress, step, totalSteps)}`;
+            if (speed) barStr += `\n⏩ ${formatMono(speed)}`;
+        }
+    
+        return `${fileStr}${sizeStr}${statusStr}${barStr}`;
     }
         // Queue display
     formatQueue(queueList, currentTask, userUrl = null) {
@@ -808,12 +808,13 @@ class GitHubAPI {
         return (nodes || []).reduce((acc, n) => acc + (n.rawSize || 0), 0);
     }
 
+// الان — فاصله داره و MiB نیست ولی بعداً از sync.yml میاد
     _formatBytes(bytes) {
-        if (bytes === 0) return "0 B";
-        const k = 1024;
+        if (bytes === 0) return "0B";
+        const k = 1000; // ← از 1024 به 1000 عوض کن (SI units = MB نه MiB)
         const sizes = ["B", "KB", "MB", "GB", "TB"];
         const i = Math.floor(Math.log(bytes) / Math.log(k));
-        return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
+        return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + sizes[i]; // ← فاصله حذف شد
     }
 }
 
@@ -1004,7 +1005,7 @@ class CommandHandler {
     // ── startNextTask (called after queue pop) ────────────────
     async startNextTask(task) {
         const setupText = this.ui.formatStatusMessage({
-            status: "⚙️ Setting up GitHub Actions…",
+            status: "⚙️Starting Github Actions…",
             fileName: null, progress: null, size: null,
         });
 
@@ -1094,7 +1095,7 @@ class CommandHandler {
             // ── هیچ تسکی در حال اجرا نیست → مستقیم شروع کن ──
             const sentMsg = await this.telegram.sendMessage(
                 chatId,
-                this.ui.formatStatusMessage({ status: "⚙️ Setting up GitHub Actions…", fileName: null, progress: null, size: null }),
+                this.ui.formatStatusMessage({ status: "⚙️Starting Github Actions…", fileName: null, progress: null, size: null }),
                 null, replyToMsgId
             );
             if (!sentMsg?.ok) {
@@ -1211,7 +1212,12 @@ class CommandHandler {
                 const tree = await this.kv.getTreeCache();
                 const { text: pageText, hasNext, page } = buildFoldersPage(tree, 0);
                 const kb = this.ui.buildKeyboard("folders_page", { page: 0, hasNext });
-                return this.telegram.sendMessage(chatId, pageText, kb.inline_keyboard.length > 0 ? kb : null, null, messageId);
+                return this.telegram.sendMessage(
+                    chatId,
+                    pageText,
+                    kb.inline_keyboard.length > 0 ? kb : null,
+                    messageId   // ← null رو حذف کن، مستقیم messageId بذار
+                );
             }
 
             case "/folder": {
@@ -1241,7 +1247,7 @@ class CommandHandler {
             case "/queue": {
                 const queue = await this.kv.getQueue();
                 const current = await this.kv.getCurrentTask();
-                return this.telegram.sendMessage(chatId, this.ui.formatQueue(queue, current, null, messageId));
+                return this.telegram.sendMessage(chatId, this.ui.formatQueue(queue, current), null, messageId);
             }
 
             case "/sync": {
@@ -1339,7 +1345,7 @@ class CommandHandler {
                     return this.telegram.sendMessage(chatId, `⚠️ ID <code>${rmId}</code> is not in the admin list.`, null, messageId);
                 }
                 const kb = this.ui.buildKeyboard("confirm_rmAdmin", { userId: rmId });
-                return this.telegram.sendMessage(chatId, `❓ Remove admin <code>${rmId}</code>?`, kb);
+                return this.telegram.sendMessage(chatId, `❓ Remove admin <code>${rmId}</code>?`, kb, mesaageId);
             }
 
             // ── /wipe [numbers...] or /wipe . ─────────────────────
@@ -1615,29 +1621,9 @@ class CommandHandler {
                     return this.telegram.editMessageText(chatId, messageId, `❌ Item <code>#${wipeId}</code> no longer exists.`);
                 }
                 const repoPath = `downloads/${target.name}`;
-            
-                // --- DEBUG LOG ---
-                const debugMsg = `🪲 <b>DEBUG — wipe_confirm</b>\n\n` +
-                    `🆔 wipeId: <code>${wipeId}</code>\n` +
-                    `📁 target.name: <code>${target.name}</code>\n` +
-                    `🛤 repoPath: <code>${repoPath}</code>\n` +
-                    `💬 chatId: <code>${chatId}</code>\n` +
-                    `📨 messageId: <code>${messageId}</code>`;
-                await this.telegram.sendMessage(chatId, debugMsg);
-                // --- END DEBUG ---
-            
-
-                
+                       
                 const dispatchResult = await this.github.sendWipeRequest(repoPath, chatId, messageId);
                 
-                // --- DEBUG LOG 2 ---
-                await this.telegram.sendMessage(chatId, 
-                    `🪲 <b>DEBUG — GitHub Dispatch</b>\n\n` +
-                    `✅ Success: <code>${dispatchResult}</code>\n` +
-                    `🔗 event_type: <code>wipe_storage</code>\n` +
-                    `📦 payload: <code>target_path=${repoPath}</code>`
-                );
-                // --- END DEBUG ---
                 await this.kv.deleteFromCacheById(wipeId);
                 return this.telegram.editMessageText(
                     chatId, messageId,
@@ -1723,7 +1709,7 @@ class CommandHandler {
               const fileSizeBytes = Number(remoteSize || 0);
               const isLargeFile = fileSizeBytes >= 100 * 1024 * 1024;
               const text = this.ui.formatStatusMessage({
-                status: status || "Processing",
+                status: status || "Processing...",
                 fileName: fileName || null,
                 progress: progress !== undefined ? progress : null,
                 size: size || null,
@@ -1866,7 +1852,7 @@ class CommandHandler {
         }
     
         // ۲. آماده‌سازی متن پیام شروع پردازش
-        const setupText = "⚙️ <b>Processing started...</b>\nSetting up GitHub Actions...";
+        const setupText = "⚙️ <b>Processing started...</b>\nStarting Github Actions...";
         
         // ۳. تصمیم‌گیری برای ادیت یا ارسال پیام جدید
         // از فیلد queueMessageId که موقع /link ذخیره کردیم استفاده می‌کنیم
