@@ -1210,7 +1210,7 @@ class CommandHandler {
               const tree = await this.kv.getTreeCache();
               const found = tree.find(n => n.type === "folder" && n.name === folderName);
               if (!found) return this.telegram.sendMessage(chatId, `❌ Folder <b>${esc(folderName)}</b> not found.`, null, messageId);
-              const folderEmoji = found.folderEmoji || "📁";
+              const folderEmoji = "📂";
               const folderDisplay = truncateFolderName(found.name);
               const folderSize = found.size ? ` ${formatMono(found.size)}` : "";
               let txt = `${folderEmoji} <b>${esc(folderDisplay)}</b>${folderSize}\n`;
@@ -1420,7 +1420,7 @@ class CommandHandler {
 
             case "/dump_memory": {
                 const kb = this.ui.buildKeyboard("confirm_dump");
-                return this.telegram.sendMessage(chatId, "⚠️ <b>Reset all queue and processing state?</b>\nThis will clear current task and queue.", kb);
+                return this.telegram.sendMessage(chatId, "⚠️ <b>Reset all queue and processing state?</b>\nThis will clear current task and queue.", kb, messageId);
             }
 
             case "/kv": {
