@@ -100,8 +100,6 @@ Use this token to access the HTTP API:
 
 ```
 Id: 123456789
-First: علی
-Last: محمدی
 ```
 
 <div dir="rtl">
