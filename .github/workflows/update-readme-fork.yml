@@ -1,0 +1,39 @@
+name: Update README after Fork
+
+on:
+  push:
+    branches: [main, master]
+    paths-ignore:
+      - '.github/workflows/update-readme-fork.yml'
+
+jobs:
+  update-readme:
+    runs-on: ubuntu-latest
+    # فقط اگه ریپو fork شده باشه اجرا می‌شه
+    if: github.repository != 'CikimCikim/Download-CF2GH'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update deploy button link in README
+        run: |
+          REPO="${{ github.repository }}"
+          echo "Updating README for repo: $REPO"
+
+          # جایگزین کردن لینک deploy با آدرس ریپوی فعلی
+          sed -i "s|CikimCikim/Download-CF2GH/actions/workflows/deploy.yml|${REPO}/actions/workflows/deploy.yml|g" README.md
+
+          # بررسی اینکه تغییری اعمال شده یا نه
+          if git diff --quiet README.md; then
+            echo "No changes needed."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add README.md
+          git commit -m "chore: update deploy button link for this fork"
+          git push
