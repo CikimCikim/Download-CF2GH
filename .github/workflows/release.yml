@@ -327,7 +327,7 @@ jobs:
             curl -s -o /dev/null \
               -H "Authorization: Bearer $GH_TOKEN" \
               -H "Content-Type: application/octet-stream" \
-              "$UPLOAD_URL?name=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))" "$ASSET_NAME")" \
+              "$UPLOAD_URL?name=$(python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))' "$ASSET_NAME")" \
               --data-binary @"$ASSET_PATH"
           }
 
