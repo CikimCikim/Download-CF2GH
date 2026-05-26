@@ -592,7 +592,7 @@ class GitHubAPI {
   _headers() {
     return {
       Authorization: `Bearer ${this.token}`,
-      Accept: "application/vnd.github.v3+json",
+      Accept: "application/vnd.github+json",
       "Content-Type": "application/json",
       "User-Agent": "Cloudflare-Worker-Bot",
     };
