@@ -870,6 +870,7 @@ class CommandHandler {
     { command: "start",   description: "Bot status" },
     { command: "link",    description: "Download: -d <URL> for repo, -r <URL> for release" },
     { command: "queue",   description: "View download queue" },
+    { command: "releases", description: "View GitHub releases" },
     { command: "folders", description: "Browse downloaded files" },
     { command: "folder",  description: "Show a specific folder" },
     { command: "sync",    description: "Sync file list from GitHub" },
@@ -1034,7 +1035,7 @@ class CommandHandler {
       );
     }
 
-    const taskData = { url, chatId, userId, status: "Queued", timestamp: Date.now() };
+    const taskData = { url, chatId, userId, status: "Queued", timestamp: Date.now(), destination };
 
     if (!currentTask) {
       const sentMsg = await this.telegram.sendMessage(
@@ -1280,7 +1281,7 @@ class CommandHandler {
    }
    text += `/start — Bot status\n/link -d <URL> — Download to repository\n/link -r <URL> — Upload to GitHub Release\n`;
    text += `/queue — View download queue\n/folders — Browse downloaded files\n`;
-   text += `/folder &lt;name&gt; — View folder contents\n/sync — Refresh file list\n/help — This help\n`;
+   text += `/folder &lt;name&gt; — View folder contents\n/sync — Refresh file list\n/releases — View GitHub releases\n/help — This help\n`;
    return this.telegram.sendMessage(chatId, text, null, replyToMsgId);
   }
   async processOwnerCommand(command, text, chatId, messageId, isOwner) {
@@ -1321,7 +1322,7 @@ class CommandHandler {
           return this.telegram.sendMessage(chatId, `⚠️ ID <code>${rmId}</code> is not in the admin list.`, null, messageId);
         }
         const kb = this.ui.buildKeyboard("confirm_rmAdmin", { userId: rmId });
-        return this.telegram.sendMessage(chatId, `❓ Remove admin <code>${rmId}</code>?`, kb, mesaageId);
+        return this.telegram.sendMessage(chatId, `❓ Remove admin <code>${rmId}</code>?`, kb, messageId);
       }
 
       case "/wipe": {
