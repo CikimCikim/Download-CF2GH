@@ -1,3 +1,4 @@
+
 // ============================================================
 //  Telegram Bot — Cloudflare Worker  (v3.0)
 //  All messages in English. Owner-only restricted commands.
@@ -510,6 +511,13 @@ class UIBuilder {
         if (data.hasNext) row.push({ text: "Next ➡️", callback_data: `folders_page:${data.page + 1}` });
         if (row.length > 0) kb.inline_keyboard = [row];
         break;
+      }    
+      case "releases_page": {
+        const row = [];
+        if (data.page > 0) row.push({ text: "⬅️ Prev", callback_data: `releases_page:${data.page - 1}` });
+        if (data.hasNext) row.push({ text: "Next ➡️", callback_data: `releases_page:${data.page + 1}` });
+        if (row.length > 0) kb.inline_keyboard = [row];
+        break;
       }
     }
     return kb;
@@ -608,7 +616,23 @@ class GitHubAPI {
     });
   }
 
+  async sendReleaseRequest(task) {
+    return this.triggerWorkflow("start_release", {
+      url: task.url,
+      tg_chat_id: task.chatId,
+      tg_message_id: task.statusMessageId,
+    });
+  }
 
+  async getReleases() {
+    const resp = await fetch(
+      `https://api.github.com/repos/${this.repoOwner}/${this.repoName}/releases?per_page=100`,
+      { headers: this._headers() }
+    );
+    if (!resp.ok) return [];
+    return resp.json();
+  }
+  
   async sendWipeRequest(path, chatId = null, messageId = null) {
     return this.triggerWorkflow("wipe_storage", {
       target_path: path,
@@ -769,6 +793,57 @@ function buildFoldersPage(tree, page = 0) {
  return { text, hasNext, page };
 }
 
+
+
+const RELEASES_PAGE_SIZE = 5;
+
+function buildReleasesPage(releases, page = 0) {
+  const start = page * RELEASES_PAGE_SIZE;
+  const slice = releases.slice(start, start + RELEASES_PAGE_SIZE);
+  const hasNext = releases.length > start + RELEASES_PAGE_SIZE;
+  const totalPages = Math.ceil(releases.length / RELEASES_PAGE_SIZE) || 1;
+
+  let text = `🏷 <b>Releases</b>\n━━━━━━━━━━━━━━━━━━━━\n\n`;
+
+  if (releases.length === 0) {
+    text += `<i>No releases found.</i>`;
+    return { text, hasNext, page };
+  }
+
+  for (const release of slice) {
+    const assets = release.assets || [];
+    const totalSize = assets.reduce((acc, a) => acc + (a.size || 0), 0);
+    const totalSizeHr = totalSize > 0
+      ? (totalSize / (1024 * 1024) >= 1024
+        ? (totalSize / (1024 * 1024 * 1024)).toFixed(2) + "GB"
+        : (totalSize / (1024 * 1024)).toFixed(1) + "MB")
+      : "N/A";
+
+    const releaseName = truncateFileName(release.name || release.tag_name);
+    const emoji = getFileEmoji(release.name || "");
+
+    text += `${emoji} <code>${esc(releaseName)}</code>  <code>${totalSizeHr}</code>\n`;
+    text += `🏷 <code>${esc(release.tag_name)}</code>\n`;
+
+    for (const asset of assets) {
+      const assetName = truncateFileName(asset.name);
+      const assetSize = asset.size
+        ? (asset.size / (1024 * 1024) >= 1024
+          ? (asset.size / (1024 * 1024 * 1024)).toFixed(2) + "GB"
+          : (asset.size / (1024 * 1024)).toFixed(1) + "MB")
+        : "N/A";
+      text += `<code>${esc(assetName)}</code>  <a href="${esc(asset.browser_download_url)}">↓</a>  <code>${assetSize}</code>\n`;
+    }
+
+    text += `\n`;
+  }
+
+  if (totalPages > 1) text += `\n<i>Page ${page + 1} of ${totalPages}</i>`;
+  return { text, hasNext, page };
+}
+
+
+
 class CommandHandler {
   constructor(env, telegram, kv, ui, github) {
     this.env = env;
@@ -794,7 +869,7 @@ class CommandHandler {
   async registerBotCommands() {
    const publicCommands = [
     { command: "start",   description: "Bot status" },
-    { command: "link",    description: "Queue a download link" },
+    { command: "link",    description: "Download: -d <URL> for repo, -r <URL> for release" },
     { command: "queue",   description: "View download queue" },
     { command: "folders", description: "Browse downloaded files" },
     { command: "folder",  description: "Show a specific folder" },
@@ -902,9 +977,13 @@ class CommandHandler {
       statusMessageId = sentMsg.result.message_id;
     }
 
-    const activeTask = { ...task, status: "Downloading", statusMessageId };
+    const activeTask = { ...task, status: task.destination === "release" ? "Releasing" : "Downloading", statusMessageId };
     await this.kv.setCurrentTask(activeTask);
-    await this.github.sendDownloadRequest(activeTask);
+    if (task.destination === "release") {
+      await this.github.sendReleaseRequest(activeTask);
+    } else {
+      await this.github.sendDownloadRequest(activeTask);
+    }
   }
 
   async updateQueuePositionMessages(queue) {
@@ -927,7 +1006,7 @@ class CommandHandler {
     }
   }
 
-  async processLink(rawUrl, chatId, replyToMsgId, userId) {
+  async processLink(rawUrl, chatId, replyToMsgId, userId, destination = "downloads") {
     const validation = validateUrl(rawUrl);
     if (!validation.valid) {
       const msgs = {
@@ -968,9 +1047,13 @@ class CommandHandler {
         return this.telegram.sendMessage(chatId, "❌ Failed to send status message.");
       }
       const statusMessageId = sentMsg.result.message_id;
-      const activeTask = { ...taskData, status: "Downloading", statusMessageId };
+      const activeTask = { ...taskData, status: destination === "release" ? "Releasing" : "Downloading", statusMessageId, destination };
       await this.kv.setCurrentTask(activeTask);
-      await this.github.sendDownloadRequest(activeTask);
+      if (destination === "release") {
+        await this.github.sendReleaseRequest(activeTask);
+      } else {
+        await this.github.sendDownloadRequest(activeTask);
+      }
     } else {
       await this.kv.addToQueue(taskData);
       const updatedQueue = await this.kv.getQueue();
@@ -1033,10 +1116,21 @@ class CommandHandler {
     if (chat.type === "private" && !isAdmin && !isOwner) return;
 
     if (command === "/link") {
-    
-      const url = text.split(" ").slice(1).join(" ").trim();
+      const args = text.split(" ").slice(1);
+      let destination = "downloads";
+      let urlPart = args;
+
+      if (args[0] === "-r") {
+        destination = "release";
+        urlPart = args.slice(1);
+      } else if (args[0] === "-d") {
+        destination = "downloads";
+        urlPart = args.slice(1);
+      }
+
+      const url = urlPart.join(" ").trim();
       if (url) {
-        return this.processLink(url, chatId, message_id, userId);
+        return this.processLink(url, chatId, message_id, userId, destination);
       } else {
         await this.telegram.sendMessage(chatId, "⚠️ Please provide a link after the command.\nUsage: <code>/link https://...</code>", null, message_id);
       }
@@ -1072,6 +1166,24 @@ class CommandHandler {
           messageId
         );
       }
+      
+      case "/releases": {
+        const msg = await this.telegram.sendMessage(chatId, "🔄 Loading releases…", null, messageId);
+        try {
+          const releases = await this.github.getReleases();
+          const { text: pageText, hasNext } = buildReleasesPage(releases, 0);
+          const kb = this.ui.buildKeyboard("releases_page", { page: 0, hasNext });
+          await this.telegram.editMessageText(
+            chatId, msg.result.message_id,
+            pageText,
+            kb.inline_keyboard.length > 0 ? kb : null
+          );
+        } catch (e) {
+          await this.telegram.editMessageText(chatId, msg.result.message_id, `❌ Error: ${esc(e.message)}`);
+        }
+        return;
+      }
+
 
       case "/folder": {
        let folderName = text.split(" ").slice(1).join(" ").trim();
@@ -1167,7 +1279,7 @@ class CommandHandler {
    } else {
     text = `📖 <b>Available Commands</b>\n━━━━━━━━━━━━━━━━━━━━\n`;
    }
-   text += `/start — Bot status\n/link &lt;URL&gt; — Queue a download\n`;
+   text += `/start — Bot status\n/link -d <URL> — Download to repository\n/link -r <URL> — Upload to GitHub Release\n`;
    text += `/queue — View download queue\n/folders — Browse downloaded files\n`;
    text += `/folder &lt;name&gt; — View folder contents\n/sync — Refresh file list\n/help — This help\n`;
    return this.telegram.sendMessage(chatId, text, null, replyToMsgId);
@@ -1454,6 +1566,15 @@ class CommandHandler {
       return;
     }
 
+    if (action === "releases_page") {
+      const page = parseInt(targetData) || 0;
+      const releases = await this.github.getReleases();
+      const { text: pageText, hasNext } = buildReleasesPage(releases, page);
+      const kb = this.ui.buildKeyboard("releases_page", { page, hasNext });
+      await this.telegram.editMessageText(chatId, messageId, pageText, kb.inline_keyboard.length > 0 ? kb : null);
+      return;
+    }
+
     if (!isOwner) {
       await this.telegram.answerCallbackQuery(cbId, "⛔ Owner only.");
       return;
@@ -1644,7 +1765,32 @@ class CommandHandler {
         }
         return new Response("Task Failed", { status: 200 });
       }
+      
+      case "release_completed": {
+        const { fileName, fileSize, releaseUrl, tag, startedAt } = data;
+        let duration = null;
+        if (startedAt) duration = formatDuration(Date.now() - Number(startedAt));
 
+        const emoji = getFileEmoji(fileName);
+        let msg = `${emoji} <b>File:</b> ${formatMono(fileName)}\n`;
+        if (fileSize) msg += `💾 <b>Size:</b> ${formatMono(fileSize)}\n`;
+        msg += `✅ <b>Status:</b> ${formatMono("Released!")}\n`;
+        if (duration) msg += `⏱ <b>Duration:</b> ${formatMono(duration)}\n`;
+        if (releaseUrl) msg += `\n🏷 <b>Release:</b> <a href="${releaseUrl}">${esc(tag)}</a>`;
+
+        await this.telegram.editMessageText(chatId, statusMessageId, msg);
+        await this.kv.clearCurrentTask();
+
+        const { nextTask } = await this.kv.popQueue();
+        if (nextTask) {
+          await this.startNextTask(nextTask);
+          const remainingQueue = await this.kv.getQueue();
+          await this.updateQueuePositionMessages(remainingQueue);
+        }
+
+        return new Response("Release Finished", { status: 200 });
+      }
+      
       case "sync_complete": {
         const { tree } = data;
         if (!Array.isArray(tree)) {
