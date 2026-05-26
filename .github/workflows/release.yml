@@ -206,13 +206,8 @@ jobs:
               | tr '\n' ',' | sed 's/,$//')
             [ -z "$AUDIO_LANGS" ] && AUDIO_LANGS="N/A"
             [ -z "$SUBTITLES" ]   && SUBTITLES="N/A"
-            EXTRA_META="⏱ Duration   : $DURATION
-📐 Resolution : $RESOLUTION
-🎞 Video      : $VCODEC
-🔊 Audio      : $ACODEC
-⚡ Bitrate    : $BITRATE
-🌐 Audio Langs: $AUDIO_LANGS
-💬 Subtitles  : $SUBTITLES"
+            EXTRA_META=$(printf "⏱ Duration   : %s\n📐 Resolution : %s\n🎞 Video      : %s\n🔊 Audio      : %s\n⚡ Bitrate    : %s\n🌐 Audio Langs: %s\n💬 Subtitles  : %s" \
+              "$DURATION" "$RESOLUTION" "$VCODEC" "$ACODEC" "$BITRATE" "$AUDIO_LANGS" "$SUBTITLES")
           fi
 
           if [[ "$EXT_LOWER" =~ ^(mp3|flac|aac|wav|ogg|m4a|wma|opus|ape|alac)$ ]]; then
@@ -237,14 +232,8 @@ jobs:
             [ -z "$ALBUM" ]  && ALBUM="N/A"
             [ -z "$YEAR" ]   && YEAR="N/A"
             [ -z "$GENRE" ]  && GENRE="N/A"
-            EXTRA_META="🎵 Title     : $TITLE
-👤 Artist    : $ARTIST
-💿 Album     : $ALBUM
-📅 Year      : $YEAR
-🎭 Genre     : $GENRE
-⏱ Duration  : $DURATION
-🎚 Bitrate   : $BITRATE
-🎵 Codec     : $ACODEC"
+            EXTRA_META=$(printf "🎵 Title     : %s\n👤 Artist    : %s\n💿 Album     : %s\n📅 Year      : %s\n🎭 Genre     : %s\n⏱ Duration  : %s\n🎚 Bitrate   : %s\n🎵 Codec     : %s" \
+              "$TITLE" "$ARTIST" "$ALBUM" "$YEAR" "$GENRE" "$DURATION" "$BITRATE" "$ACODEC")
           fi
 
           echo "file_type=$FILE_TYPE"   >> "$GITHUB_OUTPUT"
