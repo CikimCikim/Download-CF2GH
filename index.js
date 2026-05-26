@@ -1111,11 +1111,15 @@ class CommandHandler {
     const isOwner = userId === this.ownerId;
     const command = text.split(" ")[0].toLowerCase().split("@")[0];
 
+    if (command === "/help") {
+      return this.handleHelp(chatId, isOwner, message_id);
+    }
+
     if (OWNER_ONLY_COMMANDS.has(command) && !isOwner) return;
 
     if (chat.type === "private" && !isAdmin && !isOwner) return;
 
-    if (command === "/link") {
+    if (command === "/link" || this.isValidUrl(text)) {
       const args = text.split(" ").slice(1);
       let destination = "downloads";
       let urlPart = args;
@@ -1134,6 +1138,10 @@ class CommandHandler {
       } else {
         await this.telegram.sendMessage(chatId, "⚠️ Please provide a link after the command.\nUsage: <code>/link https://...</code>", null, message_id);
       }
+    }
+
+    if (command === "/help") {
+      return this.handleHelp(chatId, isOwner, message_id);
     }
 
     if (!text.startsWith("/")) return;
