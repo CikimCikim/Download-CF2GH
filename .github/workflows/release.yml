@@ -1,0 +1,413 @@
+name: Release Upload
+
+on:
+  repository_dispatch:
+    types: [start_release]
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    env:
+      URL:        ${{ github.event.client_payload.url }}
+      CHAT_ID:    ${{ github.event.client_payload.tg_chat_id }}
+      MSG_ID:     ${{ github.event.client_payload.tg_message_id }}
+      WORKER_URL: ${{ secrets.WORKER_URL }}
+      GH_TOKEN:   ${{ secrets.MY_GH_TOKEN }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.MY_GH_TOKEN }}
+          fetch-depth: 1
+
+      - name: Install tools
+        run: sudo apt-get install -y aria2 jq ffmpeg
+        
+        - name: Record start time
+        id: timing
+        run: echo "STARTED_AT=$(date +%s%3N)" >> "$GITHUB_OUTPUT"
+
+      - name: Get remote file size
+        id: fileinfo
+        run: |
+          REMOTE_SIZE=$(curl -sIL "$URL" | grep -i content-length | tail -1 | grep -o '[0-9]*') || true
+          [ -z "$REMOTE_SIZE" ] && REMOTE_SIZE=0
+          if [ "$REMOTE_SIZE" -ge 104857600 ] 2>/dev/null; then
+            POLL_INTERVAL=10
+          else
+            POLL_INTERVAL=4
+          fi
+          echo "REMOTE_SIZE=$REMOTE_SIZE" >> "$GITHUB_OUTPUT"
+          echo "POLL_INTERVAL=$POLL_INTERVAL" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch file metadata
+        id: meta
+        run: |
+          HEADERS=$(curl -sIL "$URL")
+          FILE_NAME=$(echo "$HEADERS" \
+            | grep -i 'content-disposition' \
+            | sed -n 's/.*filename="*\([^";]*\)"*.*/\1/Ip' \
+            | head -1)
+          [ -z "$FILE_NAME" ] && FILE_NAME=$(basename "$(echo "$URL" | cut -d'?' -f1)")
+          [ -z "$FILE_NAME" ] && FILE_NAME="downloaded_file"
+          FILE_SIZE_BYTES=$(echo "$HEADERS" | grep -i 'content-length' | tail -1 | grep -o '[0-9]*')
+          if [ -n "$FILE_SIZE_BYTES" ] && [ "$FILE_SIZE_BYTES" -gt 0 ] 2>/dev/null; then
+            FILE_SIZE=$(numfmt --to=si --suffix=B "$FILE_SIZE_BYTES")
+          else
+            FILE_SIZE="Unknown"
+          fi
+          echo "file_name=$FILE_NAME"     >> "$GITHUB_OUTPUT"
+          echo "file_size=$FILE_SIZE"     >> "$GITHUB_OUTPUT"
+
+      - name: Notify start
+        run: |
+          curl -s -o /dev/null -X POST "$WORKER_URL/webhook" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"event\": \"progress_update\",
+              \"data\": {
+                \"chatId\":    \"$CHAT_ID\",
+                \"messageId\": \"$MSG_ID\",
+                \"status\":    \"Downloading...\",
+                \"fileName\":  \"${{ steps.meta.outputs.file_name }}\",
+                \"size\":      \"${{ steps.meta.outputs.file_size }}\",
+                \"progress\":  0
+              }
+            }"
+
+      - name: Download with aria2c
+        id: download
+        run: |
+          FILE_NAME="${{ steps.meta.outputs.file_name }}"
+          mkdir -p /tmp/dl
+          aria2c \
+            --enable-rpc \
+            --rpc-listen-all=false \
+            --rpc-listen-port=6800 \
+            --dir=/tmp/dl \
+            --out="$FILE_NAME" \
+            --max-connection-per-server=8 \
+            --split=8 \
+            --min-split-size=1M \
+            --console-log-level=warn \
+            --summary-interval=0 \
+            "$URL" &
+          ARIA2_PID=$!
+          PREV_PROGRESS=-1
+          POLL_INTERVAL="${{ steps.fileinfo.outputs.POLL_INTERVAL }}"
+          while kill -0 "$ARIA2_PID" 2>/dev/null; do
+            sleep "$POLL_INTERVAL"
+            STAT=$(curl -s --connect-timeout 2 -X POST http://localhost:6800/jsonrpc \
+              -H "Content-Type: application/json" \
+              -d '{"jsonrpc":"2.0","id":"1","method":"aria2.getGlobalStat"}' 2>/dev/null)
+            NUM_ACTIVE=$(echo "$STAT" | jq -r '.result.numActive // "error"')
+            NUM_WAITING=$(echo "$STAT" | jq -r '.result.numWaiting // "error"')
+            if [ "$NUM_ACTIVE" == "0" ] && [ "$NUM_WAITING" == "0" ]; then
+              curl -s -X POST http://localhost:6800/jsonrpc \
+                -H "Content-Type: application/json" \
+                -d '{"jsonrpc":"2.0","id":"1","method":"aria2.shutdown"}' > /dev/null
+              break
+            fi
+            RESPONSE=$(curl -s --connect-timeout 2 -X POST http://localhost:6800/jsonrpc \
+              -H "Content-Type: application/json" \
+              -d '{"jsonrpc":"2.0","id":"1","method":"aria2.tellActive","params":[["completedLength","totalLength","downloadSpeed"]]}' 2>/dev/null)
+            COMPLETED=$(echo "$RESPONSE" | jq -r '.result[0].completedLength // "0"')
+            TOTAL=$(echo "$RESPONSE" | jq -r '.result[0].totalLength // "0"')
+            SPEED=$(echo "$RESPONSE" | jq -r '.result[0].downloadSpeed // "0"')
+            if [ "$TOTAL" -gt 0 ] 2>/dev/null; then
+              PROGRESS=$(( COMPLETED * 100 / TOTAL ))
+            else
+              PROGRESS=0
+            fi
+            if [ $(( PROGRESS - PREV_PROGRESS )) -ge 5 ] 2>/dev/null; then
+              SPEED_HR=$(numfmt --to=si --suffix=B/s "$SPEED" 2>/dev/null || echo "${SPEED}B/s")
+              curl -s -o /dev/null -X POST "$WORKER_URL/webhook" \
+                -H "Content-Type: application/json" \
+                -d "{
+                  \"event\": \"progress_update\",
+                  \"data\": {
+                    \"chatId\":     \"$CHAT_ID\",
+                    \"messageId\":  \"$MSG_ID\",
+                    \"status\":     \"Downloading...\",
+                    \"fileName\":   \"$FILE_NAME\",
+                    \"size\":       \"${{ steps.meta.outputs.file_size }}\",
+                    \"progress\":   $PROGRESS,
+                    \"speed\":      \"$SPEED_HR\",
+                    \"remoteSize\": ${{ steps.fileinfo.outputs.REMOTE_SIZE }}
+                  }
+                }"
+              PREV_PROGRESS=$PROGRESS
+            fi
+          done
+          wait "$ARIA2_PID" 2>/dev/null || true
+          if [ ! -f "/tmp/dl/$FILE_NAME" ]; then
+            echo "Downloaded file not found!" >&2
+            exit 1
+          fi
+          echo "dl_path=/tmp/dl/$FILE_NAME" >> "$GITHUB_OUTPUT"
+          
+          
+          - name: Extract metadata
+        id: meta2
+        run: |
+          FILE_PATH="${{ steps.download.outputs.dl_path }}"
+          FILE_NAME="${{ steps.meta.outputs.file_name }}"
+          EXT="${FILE_NAME##*.}"
+          EXT_LOWER=$(echo "$EXT" | tr '[:upper:]' '[:lower:]')
+
+          # تشخیص نوع فایل
+          case "$EXT_LOWER" in
+            mp4|mkv|avi|mov|wmv|webm|m4v|flv|ts|vob)
+              FILE_TYPE="🎬 Video" ;;
+            mp3|flac|aac|wav|ogg|m4a|wma|opus|ape|alac)
+              FILE_TYPE="🎵 Audio" ;;
+            jpg|jpeg|png|gif|webp|bmp|svg|tiff|ico|raw)
+              FILE_TYPE="🖼 Image" ;;
+            zip|rar|7z|tar|gz|bz2|xz|zst|lz4|cab)
+              FILE_TYPE="📦 Archive" ;;
+            apk|aab|ipa)
+              FILE_TYPE="📱 Mobile App" ;;
+            iso|img|dmg|vhd|vmdk)
+              FILE_TYPE="💿 Disk Image" ;;
+            exe|msi|deb|rpm|sh|appimage)
+              FILE_TYPE="⚙️ Software" ;;
+            pdf)
+              FILE_TYPE="📕 PDF" ;;
+            doc|docx|odt|rtf)
+              FILE_TYPE="📝 Document" ;;
+            xls|xlsx|ods|csv)
+              FILE_TYPE="📊 Spreadsheet" ;;
+            ppt|pptx|odp)
+              FILE_TYPE="📊 Presentation" ;;
+            srt|ass|ssa|vtt|sub)
+              FILE_TYPE="💬 Subtitle" ;;
+            *)
+              FILE_TYPE="📄 File" ;;
+          esac
+
+          EXTRA_META=""
+
+          # ویدیو
+          if [[ "$EXT_LOWER" =~ ^(mp4|mkv|avi|mov|wmv|webm|m4v|flv|ts|vob)$ ]]; then
+            DURATION=$(ffprobe -v quiet -show_entries format=duration \
+              -of csv=p=0 "$FILE_PATH" 2>/dev/null | awk '{printf "%02d:%02d:%02d", $1/3600, ($1%3600)/60, $1%60}')
+            RESOLUTION=$(ffprobe -v quiet -select_streams v:0 \
+              -show_entries stream=width,height -of csv=p=0 "$FILE_PATH" 2>/dev/null | head -1 | tr ',' 'x')
+            VCODEC=$(ffprobe -v quiet -select_streams v:0 \
+              -show_entries stream=codec_name -of csv=p=0 "$FILE_PATH" 2>/dev/null | head -1)
+            ACODEC=$(ffprobe -v quiet -select_streams a:0 \
+              -show_entries stream=codec_name -of csv=p=0 "$FILE_PATH" 2>/dev/null | head -1)
+            BITRATE=$(ffprobe -v quiet -show_entries format=bit_rate \
+              -of csv=p=0 "$FILE_PATH" 2>/dev/null | awk '{printf "%.1f Mbps", $1/1000000}')
+            AUDIO_LANGS=$(ffprobe -v quiet -select_streams a \
+              -show_entries stream_tags=language -of csv=p=0 "$FILE_PATH" 2>/dev/null \
+              | tr '\n' ',' | sed 's/,$//')
+            SUBTITLES=$(ffprobe -v quiet -select_streams s \
+              -show_entries stream_tags=language -of csv=p=0 "$FILE_PATH" 2>/dev/null \
+              | tr '\n' ',' | sed 's/,$//')
+            [ -z "$AUDIO_LANGS" ] && AUDIO_LANGS="N/A"
+            [ -z "$SUBTITLES" ]   && SUBTITLES="N/A"
+            EXTRA_META="⏱ Duration   : $DURATION
+📐 Resolution : $RESOLUTION
+🎞 Video      : $VCODEC
+🔊 Audio      : $ACODEC
+⚡ Bitrate    : $BITRATE
+🌐 Audio Langs: $AUDIO_LANGS
+💬 Subtitles  : $SUBTITLES"
+          fi
+
+          # موزیک
+          if [[ "$EXT_LOWER" =~ ^(mp3|flac|aac|wav|ogg|m4a|wma|opus|ape|alac)$ ]]; then
+            DURATION=$(ffprobe -v quiet -show_entries format=duration \
+              -of csv=p=0 "$FILE_PATH" 2>/dev/null | awk '{printf "%02d:%02d", $1/60, $1%60}')
+            BITRATE=$(ffprobe -v quiet -show_entries format=bit_rate \
+              -of csv=p=0 "$FILE_PATH" 2>/dev/null | awk '{printf "%d kbps", $1/1000}')
+            ACODEC=$(ffprobe -v quiet -select_streams a:0 \
+              -show_entries stream=codec_name -of csv=p=0 "$FILE_PATH" 2>/dev/null | head -1)
+            TITLE=$(ffprobe -v quiet -show_entries format_tags=title \
+              -of csv=p=0 "$FILE_PATH" 2>/dev/null | head -1)
+            ARTIST=$(ffprobe -v quiet -show_entries format_tags=artist \
+              -of csv=p=0 "$FILE_PATH" 2>/dev/null | head -1)
+            ALBUM=$(ffprobe -v quiet -show_entries format_tags=album \
+              -of csv=p=0 "$FILE_PATH" 2>/dev/null | head -1)
+            YEAR=$(ffprobe -v quiet -show_entries format_tags=date \
+              -of csv=p=0 "$FILE_PATH" 2>/dev/null | head -1 | cut -c1-4)
+            GENRE=$(ffprobe -v quiet -show_entries format_tags=genre \
+              -of csv=p=0 "$FILE_PATH" 2>/dev/null | head -1)
+            [ -z "$TITLE" ]  && TITLE="N/A"
+            [ -z "$ARTIST" ] && ARTIST="N/A"
+            [ -z "$ALBUM" ]  && ALBUM="N/A"
+            [ -z "$YEAR" ]   && YEAR="N/A"
+            [ -z "$GENRE" ]  && GENRE="N/A"
+            EXTRA_META="🎵 Title     : $TITLE
+👤 Artist    : $ARTIST
+💿 Album     : $ALBUM
+📅 Year      : $YEAR
+🎭 Genre     : $GENRE
+⏱ Duration  : $DURATION
+🎚 Bitrate   : $BITRATE
+🎵 Codec     : $ACODEC"
+          fi
+
+          echo "file_type=$FILE_TYPE"   >> "$GITHUB_OUTPUT"
+          echo "extra_meta<<EOF"        >> "$GITHUB_OUTPUT"
+          echo "$EXTRA_META"            >> "$GITHUB_OUTPUT"
+          echo "EOF"                    >> "$GITHUB_OUTPUT"
+          
+          
+          
+          
+          
+          - name: Create Release and upload assets
+        id: release
+        env:
+          GH_TOKEN: ${{ secrets.MY_GH_TOKEN }}
+        run: |
+          FILE_PATH="${{ steps.download.outputs.dl_path }}"
+          FILE_NAME="${{ steps.meta.outputs.file_name }}"
+          FILE_SIZE="${{ steps.meta.outputs.file_size }}"
+          FILE_TYPE="${{ steps.meta2.outputs.file_type }}"
+          EXTRA_META="${{ steps.meta2.outputs.extra_meta }}"
+          TAG="rel-$(date +%Y%m%d-%H%M%S)"
+          REPO="${{ github.repository }}"
+          DATE=$(date +%Y-%m-%d)
+          PART_SIZE=$((2 * 1024 * 1024 * 1024))  # 2GB
+
+          # ساخت Release body
+          BODY="$(cat <<BODY
+          📄 File Name  : $FILE_NAME
+          📦 Size       : $FILE_SIZE
+          🗂 Type       : $FILE_TYPE
+          📅 Added      : $DATE
+          🔗 Source     : $URL
+          $([ -n "$EXTRA_META" ] && echo "━━━━━━━━━━━━━━━━━━━━
+          $EXTRA_META")
+          BODY
+          )"
+
+          # ساخت Release
+          RELEASE_RESPONSE=$(curl -s -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Content-Type: application/json" \
+            "https://api.github.com/repos/$REPO/releases" \
+            -d "$(jq -n \
+              --arg tag "$TAG" \
+              --arg name "$FILE_NAME" \
+              --arg body "$BODY" \
+              '{tag_name:$tag, name:$name, body:$body, draft:false, prerelease:false}')")
+
+          RELEASE_ID=$(echo "$RELEASE_RESPONSE" | jq -r '.id')
+          RELEASE_URL=$(echo "$RELEASE_RESPONSE" | jq -r '.html_url')
+
+          if [ -z "$RELEASE_ID" ] || [ "$RELEASE_ID" == "null" ]; then
+            echo "❌ Failed to create release!" >&2
+            exit 1
+          fi
+
+          echo "release_id=$RELEASE_ID"   >> "$GITHUB_OUTPUT"
+          echo "release_url=$RELEASE_URL" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG"                 >> "$GITHUB_OUTPUT"
+
+          # بررسی سایز — split یا مستقیم
+          FILE_SIZE_BYTES=$(stat -c%s "$FILE_PATH")
+          UPLOAD_URL="https://uploads.github.com/repos/$REPO/releases/$RELEASE_ID/assets"
+
+          notify_progress() {
+            curl -s -o /dev/null -X POST "$WORKER_URL/webhook" \
+              -H "Content-Type: application/json" \
+              -d "{
+                \"event\": \"progress_update\",
+                \"data\": {
+                  \"chatId\":     \"$CHAT_ID\",
+                  \"messageId\":  \"$MSG_ID\",
+                  \"status\":     \"Uploading to Release...\",
+                  \"fileName\":   \"$FILE_NAME\",
+                  \"size\":       \"$FILE_SIZE\",
+                  \"progress\":   $1,
+                  \"uploadPart\": $2,
+                  \"totalParts\": $3
+                }
+              }"
+          }
+
+          upload_asset() {
+            local ASSET_PATH="$1"
+            local ASSET_NAME="$2"
+            curl -s -o /dev/null \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Content-Type: application/octet-stream" \
+              "$UPLOAD_URL?name=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))" "$ASSET_NAME")" \
+              --data-binary @"$ASSET_PATH"
+          }
+
+          if [ "$FILE_SIZE_BYTES" -le "$PART_SIZE" ]; then
+            # فایل زیر 2GB — مستقیم آپلود
+            notify_progress 0 1 1
+            upload_asset "$FILE_PATH" "$FILE_NAME"
+            notify_progress 100 1 1
+          else
+            # فایل بالای 2GB — split
+            mkdir -p /tmp/parts
+            split \
+              --bytes="$PART_SIZE" \
+              --numeric-suffixes=1 \
+              --suffix-length=3 \
+              "$FILE_PATH" \
+              "/tmp/parts/${FILE_NAME}."
+
+            TOTAL_PARTS=$(ls /tmp/parts | wc -l)
+            UPLOADED=0
+
+            notify_progress 0 0 "$TOTAL_PARTS"
+
+            for PART in $(ls /tmp/parts | sort); do
+              UPLOADED=$((UPLOADED + 1))
+              upload_asset "/tmp/parts/$PART" "$PART"
+              PROGRESS=$(( UPLOADED * 100 / TOTAL_PARTS ))
+              notify_progress "$PROGRESS" "$UPLOADED" "$TOTAL_PARTS"
+            done
+          fi
+          
+          
+          
+          
+          
+          
+          
+          - name: Notify completion
+        run: |
+          curl -s -o /dev/null -X POST "$WORKER_URL/webhook" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"event\": \"release_completed\",
+              \"data\": {
+                \"chatId\":      \"$CHAT_ID\",
+                \"messageId\":   \"$MSG_ID\",
+                \"fileName\":    \"${{ steps.meta.outputs.file_name }}\",
+                \"fileSize\":    \"${{ steps.meta.outputs.file_size }}\",
+                \"fileType\":    \"${{ steps.meta2.outputs.file_type }}\",
+                \"releaseUrl\":  \"${{ steps.release.outputs.release_url }}\",
+                \"tag\":         \"${{ steps.release.outputs.tag }}\",
+                \"startedAt\":   \"${{ steps.timing.outputs.STARTED_AT }}\"
+              }
+            }"
+
+      - name: Notify failure
+        if: failure()
+        run: |
+          curl -s -o /dev/null -X POST "$WORKER_URL/webhook" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"event\": \"task_failed\",
+              \"data\": {
+                \"chatId\":    \"$CHAT_ID\",
+                \"messageId\": \"$MSG_ID\",
+                \"reason\":    \"Release workflow failed. Check GitHub Actions logs.\"
+              }
+            }"
+            
+            
+            
+            
