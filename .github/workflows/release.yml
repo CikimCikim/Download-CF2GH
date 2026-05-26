@@ -24,8 +24,8 @@ jobs:
 
       - name: Install tools
         run: sudo apt-get install -y aria2 jq ffmpeg
-        
-        - name: Record start time
+
+      - name: Record start time
         id: timing
         run: echo "STARTED_AT=$(date +%s%3N)" >> "$GITHUB_OUTPUT"
 
@@ -147,9 +147,8 @@ jobs:
             exit 1
           fi
           echo "dl_path=/tmp/dl/$FILE_NAME" >> "$GITHUB_OUTPUT"
-          
-          
-          - name: Extract metadata
+
+      - name: Extract metadata
         id: meta2
         run: |
           FILE_PATH="${{ steps.download.outputs.dl_path }}"
@@ -157,7 +156,6 @@ jobs:
           EXT="${FILE_NAME##*.}"
           EXT_LOWER=$(echo "$EXT" | tr '[:upper:]' '[:lower:]')
 
-          # تشخیص نوع فایل
           case "$EXT_LOWER" in
             mp4|mkv|avi|mov|wmv|webm|m4v|flv|ts|vob)
               FILE_TYPE="🎬 Video" ;;
@@ -189,7 +187,6 @@ jobs:
 
           EXTRA_META=""
 
-          # ویدیو
           if [[ "$EXT_LOWER" =~ ^(mp4|mkv|avi|mov|wmv|webm|m4v|flv|ts|vob)$ ]]; then
             DURATION=$(ffprobe -v quiet -show_entries format=duration \
               -of csv=p=0 "$FILE_PATH" 2>/dev/null | awk '{printf "%02d:%02d:%02d", $1/3600, ($1%3600)/60, $1%60}')
@@ -218,7 +215,6 @@ jobs:
 💬 Subtitles  : $SUBTITLES"
           fi
 
-          # موزیک
           if [[ "$EXT_LOWER" =~ ^(mp3|flac|aac|wav|ogg|m4a|wma|opus|ape|alac)$ ]]; then
             DURATION=$(ffprobe -v quiet -show_entries format=duration \
               -of csv=p=0 "$FILE_PATH" 2>/dev/null | awk '{printf "%02d:%02d", $1/60, $1%60}')
@@ -255,12 +251,8 @@ jobs:
           echo "extra_meta<<EOF"        >> "$GITHUB_OUTPUT"
           echo "$EXTRA_META"            >> "$GITHUB_OUTPUT"
           echo "EOF"                    >> "$GITHUB_OUTPUT"
-          
-          
-          
-          
-          
-          - name: Create Release and upload assets
+
+      - name: Create Release and upload assets
         id: release
         env:
           GH_TOKEN: ${{ secrets.MY_GH_TOKEN }}
@@ -273,9 +265,8 @@ jobs:
           TAG="rel-$(date +%Y%m%d-%H%M%S)"
           REPO="${{ github.repository }}"
           DATE=$(date +%Y-%m-%d)
-          PART_SIZE=$((2 * 1024 * 1024 * 1024))  # 2GB
+          PART_SIZE=$((2 * 1024 * 1024 * 1024))
 
-          # ساخت Release body
           BODY="$(cat <<BODY
           📄 File Name  : $FILE_NAME
           📦 Size       : $FILE_SIZE
@@ -287,7 +278,6 @@ jobs:
           BODY
           )"
 
-          # ساخت Release
           RELEASE_RESPONSE=$(curl -s -X POST \
             -H "Authorization: Bearer $GH_TOKEN" \
             -H "Content-Type: application/json" \
@@ -310,7 +300,6 @@ jobs:
           echo "release_url=$RELEASE_URL" >> "$GITHUB_OUTPUT"
           echo "tag=$TAG"                 >> "$GITHUB_OUTPUT"
 
-          # بررسی سایز — split یا مستقیم
           FILE_SIZE_BYTES=$(stat -c%s "$FILE_PATH")
           UPLOAD_URL="https://uploads.github.com/repos/$REPO/releases/$RELEASE_ID/assets"
 
@@ -343,12 +332,10 @@ jobs:
           }
 
           if [ "$FILE_SIZE_BYTES" -le "$PART_SIZE" ]; then
-            # فایل زیر 2GB — مستقیم آپلود
             notify_progress 0 1 1
             upload_asset "$FILE_PATH" "$FILE_NAME"
             notify_progress 100 1 1
           else
-            # فایل بالای 2GB — split
             mkdir -p /tmp/parts
             split \
               --bytes="$PART_SIZE" \
@@ -359,7 +346,6 @@ jobs:
 
             TOTAL_PARTS=$(ls /tmp/parts | wc -l)
             UPLOADED=0
-
             notify_progress 0 0 "$TOTAL_PARTS"
 
             for PART in $(ls /tmp/parts | sort); do
@@ -369,14 +355,8 @@ jobs:
               notify_progress "$PROGRESS" "$UPLOADED" "$TOTAL_PARTS"
             done
           fi
-          
-          
-          
-          
-          
-          
-          
-          - name: Notify completion
+
+      - name: Notify completion
         run: |
           curl -s -o /dev/null -X POST "$WORKER_URL/webhook" \
             -H "Content-Type: application/json" \
@@ -407,7 +387,3 @@ jobs:
                 \"reason\":    \"Release workflow failed. Check GitHub Actions logs.\"
               }
             }"
-            
-            
-            
-            
