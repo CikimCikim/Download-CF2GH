@@ -10,11 +10,11 @@ jobs:
 
     env:
       URL:        ${{ github.event.client_payload.url }}
-      CHAT_ID:    ${{ github.event.client_payload.tg_chat_id }}
-      MSG_ID:     ${{ github.event.client_payload.tg_message_id }}
+      CHAT_ID:    ${{ github.event.client_payload.chatId }}
+      MSG_ID:     ${{ github.event.client_payload.statusMessageId }}
       WORKER_URL: ${{ secrets.WORKER_URL }}
       GH_TOKEN:   ${{ secrets.MY_GH_TOKEN }}
-
+      
     steps:
       - name: Checkout
         uses: actions/checkout@v4
